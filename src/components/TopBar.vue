@@ -2,7 +2,13 @@
 defineProps({
   isCreate: { type: Boolean, default: false },
   connectionLabel: { type: String, required: true },
+  isLoading: { type: Boolean, default: false },
+  isSaving: { type: Boolean, default: false },
 })
+
+defineEmits<{
+  reload: []
+}>()
 </script>
 
 <template>
@@ -14,6 +20,15 @@ defineProps({
       </h1>
     </div>
     <div class="flex items-center gap-4">
+      <button
+        type="button"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-[#c9dce9] bg-white px-3 py-2 text-[11px] font-bold text-[#4e708d] shadow-[0_3px_8px_rgba(36,59,86,.04)] transition hover:border-[#9bbdd1] hover:bg-[#f4f9fc] disabled:cursor-wait disabled:opacity-60 max-[700px]:px-2"
+        :disabled="isLoading || isSaving"
+        @click="$emit('reload')"
+      >
+        <span class="text-sm leading-none" :class="isLoading ? 'animate-spin' : ''">↻</span>
+        <span class="max-[700px]:hidden">Загрузить из KT</span>
+      </button>
       <span class="inline-flex items-center gap-1.5 rounded-lg border border-[#cfe5e0] bg-[#effaf7] px-2.5 py-1.5 text-[11px] font-bold text-[#428d78] max-[700px]:hidden">
         <span class="h-1.5 w-1.5 rounded-full bg-[#58c7a6]" />
         {{ connectionLabel }}

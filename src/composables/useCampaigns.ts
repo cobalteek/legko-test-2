@@ -3,7 +3,10 @@ import {
   createKeitaroClient,
   type KeitaroCampaign,
   type KeitaroCampaignRequest,
+  type KeitaroDomain,
+  type KeitaroGroup,
   type KeitaroStream,
+  type KeitaroTrafficSource,
 } from '../api/keitaro'
 
 export type CampaignStatus = 'active' | 'paused'
@@ -26,6 +29,8 @@ export interface CampaignOffer {
   state: OfferState
   pending: boolean
   pinned: boolean
+  share: number
+  baseShare: number
   savedPercentage: number | null
   baseState: BaseOfferState
   basePinned: boolean
@@ -76,222 +81,43 @@ export interface OfferRow extends OfferCatalogItem {
   state: OfferState
   pending: boolean
   pinned: boolean
+  share: number
   savedPercentage: number | null
   percentage: number
 }
 
-type LegacyCampaignOffer = number | (Partial<CampaignOffer> & Pick<CampaignOffer, 'id'>)
-type LegacyCampaignStream = Partial<Omit<CampaignStream, 'offers'>> & {
-  id: number
-  name: string
-  type: StreamType
-  offers: LegacyCampaignOffer[]
+function calculateIntegerShares(rows: Pick<OfferRow, 'pinned' | 'savedPercentage'>[]): number[] {
+  if (rows.length === 0) return []
+  if (rows.length === 1) return [100]
+
+  const pinnedTotal = rows
+    .filter((row) => row.pinned)
+    .reduce((total, row) => total + Math.round(row.savedPercentage ?? 0), 0)
+  const unpinnedIndexes = rows
+    .map((row, index) => (row.pinned ? -1 : index))
+    .filter((index) => index >= 0)
+  const shares = rows.map((row) => (row.pinned ? Math.round(row.savedPercentage ?? 0) : 0))
+
+  if (unpinnedIndexes.length === 0) return shares
+
+  const remaining = Math.max(0, 100 - pinnedTotal)
+  const baseShare = Math.floor(remaining / unpinnedIndexes.length)
+  let remainder = remaining - baseShare * unpinnedIndexes.length
+
+  unpinnedIndexes.forEach((index) => {
+    shares[index] = baseShare
+    if (remainder > 0) {
+      shares[index] += 1
+      remainder -= 1
+    }
+  })
+
+  return shares
 }
-type LegacyCampaign = Omit<Campaign, 'streams'> & {
-  streams?: LegacyCampaignStream[]
-  offers?: LegacyCampaignOffer[]
-}
-
-const fallbackOfferCatalog: OfferCatalogItem[] = [
-  { id: 101, name: 'Nutra GEO MX', vertical: 'Nutra', geo: 'MX' },
-  { id: 204, name: 'Finance Leads AU', vertical: 'Finance', geo: 'AU' },
-  { id: 317, name: 'Dating RO', vertical: 'Dating', geo: 'RO' },
-  { id: 422, name: 'Mobile App US', vertical: 'Apps', geo: 'US' },
-  { id: 508, name: 'E-commerce DE', vertical: 'E-commerce', geo: 'DE' },
-]
-
-const storageKey = 'adrobot-campaigns-v1'
-
-const defaultCampaigns: LegacyCampaign[] = [
-  {
-    id: 1,
-    name: 'test_ivanov_mexico',
-    geo: 'MX',
-    status: 'active',
-    domain: 'go.example.com',
-    group: 'TESTS',
-    source: 'Facebook',
-    createdAt: 'Сегодня, 12:40',
-    streams: [
-      {
-        id: 101,
-        name: 'MX → офферы',
-        type: 'regular',
-        status: 'active',
-        position: 1,
-        geo: ['MX'],
-        fallbackUrl: '',
-        pending: false,
-        isNew: false,
-        baseName: 'MX → офферы',
-        baseType: 'regular',
-        baseStatus: 'active',
-        baseGeo: ['MX'],
-        baseFallbackUrl: '',
-        offers: [
-          { id: 101, state: 'active', pending: false, pinned: false },
-          { id: 204, state: 'active', pending: false, pinned: false },
-        ],
-      },
-      {
-        id: 102,
-        name: 'Остальной трафик → Google',
-        type: 'default',
-        status: 'active',
-        position: 2,
-        geo: [],
-        fallbackUrl: 'https://www.google.com/',
-        pending: false,
-        isNew: false,
-        baseName: 'Остальной трафик → Google',
-        baseType: 'default',
-        baseStatus: 'active',
-        baseGeo: [],
-        baseFallbackUrl: 'https://www.google.com/',
-        offers: [],
-      },
-    ],
-  },
-  {
-    id: 2,
-    name: 'test_petrov_australia',
-    geo: 'AU',
-    status: 'active',
-    domain: 'go.example.com',
-    group: 'TESTS',
-    source: 'Google Ads',
-    createdAt: 'Вчера, 18:15',
-    streams: [
-      {
-        id: 201,
-        name: 'AU → оффер',
-        type: 'regular',
-        status: 'active',
-        position: 1,
-        geo: ['AU'],
-        fallbackUrl: '',
-        pending: false,
-        isNew: false,
-        baseName: 'AU → оффер',
-        baseType: 'regular',
-        baseStatus: 'active',
-        baseGeo: ['AU'],
-        baseFallbackUrl: '',
-        offers: [{ id: 204, state: 'active', pending: false, pinned: false }],
-      },
-    ],
-  },
-  {
-    id: 3,
-    name: 'test_sidorov_romania',
-    geo: 'RO',
-    status: 'paused',
-    domain: 'track.example.com',
-    group: 'ARCHIVE',
-    source: 'TikTok',
-    createdAt: '19 ноя, 09:20',
-    streams: [
-      {
-        id: 301,
-        name: 'RO → офферы',
-        type: 'regular',
-        status: 'active',
-        position: 1,
-        geo: ['RO'],
-        fallbackUrl: '',
-        pending: false,
-        isNew: false,
-        baseName: 'RO → офферы',
-        baseType: 'regular',
-        baseStatus: 'active',
-        baseGeo: ['RO'],
-        baseFallbackUrl: '',
-        offers: [
-          { id: 317, state: 'active', pending: false, pinned: false },
-          { id: 508, state: 'active', pending: false, pinned: false },
-        ],
-      },
-    ],
-  },
-]
 
 function normalizeGeoList(value: string | string[] | undefined): string[] {
   const values = Array.isArray(value) ? value : value?.split(/[\s,;]+/) ?? []
   return [...new Set(values.map((item) => item.trim().toUpperCase()).filter(Boolean))]
-}
-
-function normalizeOfferItems(items: LegacyCampaignOffer[] | undefined): CampaignOffer[] {
-  return (items ?? []).map((item): CampaignOffer => {
-    const legacyItem = typeof item === 'number' ? undefined : item
-    const id = typeof item === 'number' ? item : item.id
-    const state: OfferState = legacyItem?.state ?? 'active'
-    const pinned = legacyItem?.pinned ?? false
-    const savedPercentage = legacyItem?.savedPercentage ?? null
-
-    return {
-      id,
-      state,
-      pending: legacyItem?.pending ?? false,
-      pinned,
-      savedPercentage,
-      baseState:
-        legacyItem?.baseState ?? (state === 'removed' && !legacyItem?.pending ? 'removed' : 'active'),
-      basePinned: legacyItem?.basePinned ?? pinned,
-      basePercentage: legacyItem?.basePercentage ?? savedPercentage,
-    }
-  })
-}
-
-function normalizeCampaigns(source: LegacyCampaign[]): Campaign[] {
-  return source.map((campaign) => ({
-    ...campaign,
-    geo: normalizeGeoList(campaign.geo).join(', '),
-    streams: (campaign.streams?.length
-      ? campaign.streams
-      : [{
-          id: campaign.id * 100 + 1,
-          name: `${campaign.geo || 'GEO'} → офферы`,
-          type: 'regular' as const,
-          status: 'active' as const,
-          position: 1,
-          geo: normalizeGeoList(campaign.geo),
-          fallbackUrl: '',
-          pending: false,
-          isNew: false,
-          baseName: `${campaign.geo || 'GEO'} → офферы`,
-          baseType: 'regular',
-          baseStatus: 'active',
-          baseGeo: normalizeGeoList(campaign.geo),
-          baseFallbackUrl: '',
-          offers: campaign.offers ?? [],
-        }]
-    ).map((stream, index): CampaignStream => ({
-      id: stream.id,
-      name: stream.name,
-      type: stream.type ?? 'regular',
-      status: stream.status ?? 'active',
-      position: stream.position ?? index + 1,
-      geo: normalizeGeoList(stream.geo),
-      fallbackUrl: stream.fallbackUrl ?? '',
-      pending: stream.pending ?? false,
-      isNew: stream.isNew ?? false,
-      baseName: stream.baseName ?? stream.name,
-      baseType: (stream.baseType ?? stream.type ?? 'regular') as StreamType,
-      baseStatus: (stream.baseStatus ?? stream.status ?? 'active') as BaseStreamStatus,
-      baseGeo: normalizeGeoList(stream.baseGeo ?? stream.geo),
-      baseFallbackUrl: stream.baseFallbackUrl ?? stream.fallbackUrl ?? '',
-      offers: normalizeOfferItems(stream.offers),
-    })),
-  }))
-}
-
-function loadLocalCampaigns(): Campaign[] {
-  try {
-    const saved = window.localStorage.getItem(storageKey)
-    return normalizeCampaigns(saved ? JSON.parse(saved) : structuredClone(defaultCampaigns))
-  } catch {
-    return normalizeCampaigns(structuredClone(defaultCampaigns))
-  }
 }
 
 function formatCreatedAt(value?: string): string {
@@ -331,6 +157,8 @@ function makeCampaignOffer(id: number, values: Partial<CampaignOffer> = {}): Cam
     state: values.state ?? 'active',
     pending: values.pending ?? false,
     pinned: values.pinned ?? false,
+    share: values.share ?? 0,
+    baseShare: values.baseShare ?? values.share ?? 0,
     savedPercentage: values.savedPercentage ?? null,
     baseState: values.baseState ?? 'active',
     basePinned: values.basePinned ?? false,
@@ -339,22 +167,28 @@ function makeCampaignOffer(id: number, values: Partial<CampaignOffer> = {}): Cam
 }
 
 function mergeRemoteOffers(
-  remoteOffers: { offer_id: number; share: number }[],
+  remoteOffers: { offer_id: number; share: number; state?: string }[],
   cachedOffers: CampaignOffer[],
 ): CampaignOffer[] {
   const cachedById = new Map(cachedOffers.map((offer) => [offer.id, offer]))
-  const remoteIds = new Set(remoteOffers.map((offer) => offer.offer_id))
+  const remoteIds = new Set(remoteOffers.map((offer) => Number(offer.offer_id)))
   const activeOffers = remoteOffers.map((remoteOffer) => {
-    const cached = cachedById.get(remoteOffer.offer_id)
+    const offerId = Number(remoteOffer.offer_id)
+    const cached = cachedById.get(offerId)
 
     if (cached?.pending) return cached
 
+    const isRemoved = remoteOffer.state === 'disabled' || remoteOffer.state === 'removed'
     const pinned = cached?.basePinned ?? false
     const savedPercentage = pinned ? cached?.basePercentage ?? remoteOffer.share : null
 
-    return makeCampaignOffer(remoteOffer.offer_id, {
+    return makeCampaignOffer(offerId, {
+      state: isRemoved ? 'removed' : 'active',
       pinned,
+      share: isRemoved ? 0 : Math.round(remoteOffer.share),
+      baseShare: isRemoved ? 0 : Math.round(remoteOffer.share),
       savedPercentage,
+      baseState: isRemoved ? 'removed' : 'active',
       basePinned: pinned,
       basePercentage: savedPercentage,
     })
@@ -379,21 +213,27 @@ function normalizeStreamType(value?: string): StreamType {
   return value === 'forced' || value === 'default' ? value : 'regular'
 }
 
+function isTemporaryStreamId(id: number): boolean {
+  return id < 0 || id >= 1_000_000_000_000
+}
+
 export function formatPercentage(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
 }
 
 export function useCampaigns() {
   const keitaro = createKeitaroClient()
-  const isApiMode = Boolean(keitaro)
-  const campaigns = ref<Campaign[]>(isApiMode ? [] : loadLocalCampaigns())
-  const offerCatalog = ref<OfferCatalogItem[]>(fallbackOfferCatalog)
+  const campaigns = ref<Campaign[]>([])
+  const offerCatalog = ref<OfferCatalogItem[]>([])
+  const groupCatalog = ref<KeitaroGroup[]>([])
+  const domainCatalog = ref<KeitaroDomain[]>([])
+  const sourceCatalog = ref<KeitaroTrafficSource[]>([])
   const selectedCampaignId = ref(1)
   const selectedStreamId = ref<number | null>(null)
   const search = ref('')
   const offerToAdd = ref('')
   const notice = ref('')
-  const isLoading = ref(isApiMode)
+  const isLoading = ref(true)
   const isSaving = ref(false)
   const showSingleOfferWarning = ref(false)
   const lastRemovedOfferId = ref<number | null>(null)
@@ -406,6 +246,17 @@ export function useCampaigns() {
     selectedCampaign.value?.streams.find((stream) => stream.id === selectedStreamId.value) ??
       selectedCampaign.value?.streams[0],
   )
+
+  function getInitialStreamId(campaign: Campaign | undefined): number | null {
+    if (!campaign) return null
+
+    return (
+      campaign.streams.find((stream) => stream.offers.some((offer) => offer.state !== 'removed'))?.id ??
+      campaign.streams.find((stream) => stream.type === 'default')?.id ??
+      campaign.streams[0]?.id ??
+      null
+    )
+  }
 
   const filteredCampaigns = computed(() => {
     const query = search.value.trim().toLowerCase()
@@ -422,23 +273,29 @@ export function useCampaigns() {
 
   const selectedOffers = computed<OfferRow[]>(() => {
     const rows = (selectedStream.value?.offers ?? [])
-      .map((item): OfferRow | null => {
-        const offer = offerCatalog.value.find((candidate) => candidate.id === item.id)
+      .map((item): OfferRow => {
+        const offer = offerCatalog.value.find((candidate) => candidate.id === item.id) ?? {
+          id: item.id,
+          name: `Оффер #${item.id}`,
+          vertical: 'Offer',
+          geo: '—',
+        }
 
-        return offer
-          ? {
-              ...offer,
-              state: item.state,
-              pending: item.pending,
-              pinned: item.pinned,
-              savedPercentage: item.savedPercentage,
-              percentage: 0,
-            }
-          : null
+        return {
+          ...offer,
+          state: item.state,
+          pending: item.pending,
+          pinned: item.pinned,
+          share: item.share,
+          savedPercentage: item.savedPercentage,
+          percentage: item.share,
+        }
       })
-      .filter((row): row is OfferRow => row !== null)
 
     const activeRows = rows.filter((row) => row.state !== 'removed')
+    const hasOfferDraft = selectedStream.value?.offers.some((offer) => offer.pending) ?? false
+    if (!hasOfferDraft) return rows
+
     if (activeRows.length === 1) {
       return rows.map((row) => ({
         ...row,
@@ -446,22 +303,12 @@ export function useCampaigns() {
       }))
     }
 
-    const pinnedTotal = activeRows
-      .filter((row) => row.pinned)
-      .reduce((total, row) => total + (row.savedPercentage ?? 0), 0)
-    const unpinnedRows = activeRows.filter((row) => !row.pinned)
-    const unpinnedPercentage = unpinnedRows.length
-      ? Math.max(0, 100 - pinnedTotal) / unpinnedRows.length
-      : 0
+    const shares = calculateIntegerShares(activeRows)
+    const sharesById = new Map(activeRows.map((row, index) => [row.id, shares[index]]))
 
     return rows.map((row) => ({
       ...row,
-      percentage:
-        row.state === 'removed'
-          ? 0
-          : row.pinned
-            ? row.savedPercentage ?? 0
-            : unpinnedPercentage,
+      percentage: row.state === 'removed' ? 0 : sharesById.get(row.id) ?? 0,
     }))
   })
 
@@ -500,10 +347,6 @@ export function useCampaigns() {
     }, 3200)
   }
 
-  function persistCampaigns(): void {
-    window.localStorage.setItem(storageKey, JSON.stringify(campaigns.value))
-  }
-
   function refreshPending(item: CampaignOffer): void {
     const stateMatches = item.state === item.baseState
     const pinMatches = item.pinned === item.basePinned
@@ -529,7 +372,7 @@ export function useCampaigns() {
 
   function selectCampaign(id: number): void {
     selectedCampaignId.value = id
-    selectedStreamId.value = campaigns.value.find((campaign) => campaign.id === id)?.streams[0]?.id ?? null
+    selectedStreamId.value = getInitialStreamId(campaigns.value.find((campaign) => campaign.id === id))
   }
 
   function selectStream(id: number): void {
@@ -543,7 +386,7 @@ export function useCampaigns() {
     if (!campaign) return
 
     const nextPosition = campaign.streams.length + 1
-    const id = Date.now()
+    const id = -Date.now()
     const stream: CampaignStream = {
       id,
       name: `Поток ${nextPosition}`,
@@ -563,7 +406,6 @@ export function useCampaigns() {
     }
     campaign.streams.push(stream)
     selectedStreamId.value = id
-    persistCampaigns()
     showNotice('Новый поток добавлен в черновик')
   }
 
@@ -579,7 +421,6 @@ export function useCampaigns() {
         .filter((item) => item.type !== 'default' && item.status !== 'removed')
         .flatMap((item) => item.geo),
     )].join(', ') || '—'
-    persistCampaigns()
   }
 
   function removeStream(id: number): void {
@@ -596,22 +437,19 @@ export function useCampaigns() {
     stream.pending = true
     const nextStream = campaign.streams.find((item) => item.status !== 'removed')
     selectedStreamId.value = nextStream?.id ?? null
-    persistCampaigns()
     showNotice('Поток помечен на удаление')
   }
 
   function mapRemoteCampaign(
     remote: KeitaroCampaign,
     streams: KeitaroStream[],
-    cached?: Campaign,
   ): Campaign {
-    const group = cached?.group ?? ''
-    const source = cached?.source ?? ''
-    const domain = cached?.domain ?? ''
-    const cachedStreams = cached?.streams ?? []
     const mappedStreams = streams.map((stream, index): CampaignStream => {
-      const cachedStream = cachedStreams.find((candidate) => candidate.id === stream.id)
-      const geo = getStreamGeo(stream)
+      const geo = normalizeGeoList(stream.metadata?.geo ?? getStreamGeo(stream))
+      const fallbackUrl =
+        stream.metadata?.fallback_url ??
+        stream.action_payload ??
+        (typeof stream.action_options?.url === 'string' ? stream.action_options.url : '')
 
       return {
         id: stream.id,
@@ -619,22 +457,18 @@ export function useCampaigns() {
         type: normalizeStreamType(stream.type),
         status: stream.state === 'disabled' ? 'paused' : 'active',
         position: stream.position ?? index + 1,
-        geo: cachedStream?.geo.length ? cachedStream.geo : geo,
-        fallbackUrl:
-          cachedStream?.fallbackUrl ??
-          (typeof stream.action_options?.url === 'string' ? stream.action_options.url : ''),
+        geo,
+        fallbackUrl,
         pending: false,
         isNew: false,
-        baseName: cachedStream?.baseName ?? stream.name,
-        baseType: cachedStream?.baseType ?? normalizeStreamType(stream.type),
-        baseStatus: cachedStream?.baseStatus ?? (stream.state === 'disabled' ? 'paused' : 'active'),
-        baseGeo: cachedStream?.baseGeo ?? geo,
-        baseFallbackUrl:
-          cachedStream?.baseFallbackUrl ??
-          (typeof stream.action_options?.url === 'string' ? stream.action_options.url : ''),
+        baseName: stream.name,
+        baseType: normalizeStreamType(stream.type),
+        baseStatus: stream.state === 'disabled' ? 'paused' : 'active',
+        baseGeo: geo,
+        baseFallbackUrl: fallbackUrl,
         offers: mergeRemoteOffers(
-          stream.offers?.filter((offer) => offer.state !== 'disabled') ?? [],
-          cachedStream?.offers ?? [],
+          stream.offers ?? [],
+          [],
         ),
       }
     })
@@ -643,19 +477,17 @@ export function useCampaigns() {
       id: remote.id,
       alias: remote.alias,
       name: remote.name,
-      geo: cached?.geo ?? (mappedStreams.flatMap((stream) => stream.geo).join(', ') || '—'),
+      geo: remote.metadata?.geo ?? (mappedStreams.flatMap((stream) => stream.geo).join(', ') || '—'),
       status: remote.state === 'active' ? 'active' : 'paused',
-      domain,
-      group,
-      source,
+      domain: remote.metadata?.domain ?? '',
+      group: remote.metadata?.group ?? '',
+      source: remote.metadata?.source ?? '',
       createdAt: formatCreatedAt(remote.created_at),
       streams: mappedStreams,
     }
   }
 
-  async function loadRemoteData(): Promise<void> {
-    if (!keitaro) return
-
+  async function loadRemoteData(): Promise<boolean> {
     try {
       const [remoteCampaigns, remoteOffers, deletedOffers, groups, domains, trafficSources] = await Promise.all([
         keitaro.getCampaigns(),
@@ -665,11 +497,12 @@ export function useCampaigns() {
         keitaro.getDomains(),
         keitaro.getTrafficSources(),
       ])
+      groupCatalog.value = groups
+      domainCatalog.value = domains
+      sourceCatalog.value = trafficSources
       const streams = await Promise.all(
         remoteCampaigns.map((campaign) => keitaro.getCampaignStreams(campaign.id)),
       )
-      const localCampaigns = loadLocalCampaigns()
-      const localById = new Map(localCampaigns.map((campaign) => [campaign.id, campaign]))
       const groupById = new Map(groups.map((group) => [group.id, group]))
       const domainById = new Map(domains.map((domain) => [domain.id, domain]))
       const sourceById = new Map(trafficSources.map((source) => [source.id, source]))
@@ -678,7 +511,6 @@ export function useCampaigns() {
         const mapped = mapRemoteCampaign(
           remoteCampaign,
           streams[index],
-          localById.get(remoteCampaign.id),
         )
 
         return {
@@ -703,69 +535,30 @@ export function useCampaigns() {
         geo: offer.country?.join(', ') || '—',
         archived: true,
       }))
-      const knownIds = new Set([...remoteCatalog, ...deletedCatalog].map((offer) => offer.id))
-      const preservedCatalog = localCampaigns
-        .flatMap((campaign) => campaign.streams.flatMap((stream) => stream.offers))
-        .filter((offer) => !knownIds.has(offer.id))
-        .map((offer) => ({
-          id: offer.id,
-          name: `Offer #${offer.id}`,
-          vertical: 'Offer',
-          geo: '—',
-        }))
-
-      offerCatalog.value = [...remoteCatalog, ...deletedCatalog, ...preservedCatalog]
+      offerCatalog.value = [...remoteCatalog, ...deletedCatalog]
+      selectedCampaignId.value = campaigns.value[0]?.id ?? 1
+      selectedStreamId.value = getInitialStreamId(campaigns.value[0])
+      return true
+    } catch (error) {
+      campaigns.value = []
       selectedCampaignId.value = campaigns.value[0]?.id ?? 1
       selectedStreamId.value = campaigns.value[0]?.streams[0]?.id ?? null
-      persistCampaigns()
-  } catch (error) {
-    campaigns.value = loadLocalCampaigns()
-    selectedCampaignId.value = campaigns.value[0]?.id ?? 1
-    selectedStreamId.value = campaigns.value[0]?.streams[0]?.id ?? null
-    showNotice(`Не удалось загрузить Keitaro: ${getErrorMessage(error)}`)
+      showNotice(`Не удалось загрузить Keitaro: ${getErrorMessage(error)}`)
+      return false
     } finally {
       isLoading.value = false
     }
   }
 
-  function createMockCampaign(form: CampaignForm, offerId: number): boolean {
-    const geoList = normalizeGeoList(form.geo)
-    const campaign: Campaign = {
-      id: Date.now(),
-      name: form.name.trim(),
-      geo: geoList.join(', '),
-      status: 'active',
-      domain: form.domain,
-      group: form.group,
-      source: form.source,
-      createdAt: 'Только что',
-      streams: [
-        {
-          id: Date.now() + 1,
-          name: `${geoList.join(', ')} → офферы`,
-          type: 'regular',
-          status: 'active',
-          position: 1,
-          geo: geoList,
-          fallbackUrl: '',
-          pending: false,
-          isNew: false,
-          baseName: `${geoList.join(', ')} → офферы`,
-          baseType: 'regular',
-          baseStatus: 'active',
-          baseGeo: geoList,
-          baseFallbackUrl: '',
-          offers: [makeCampaignOffer(offerId)],
-        },
-      ],
+  async function reloadFromKeitaro(): Promise<void> {
+    if (isLoading.value || isSaving.value) return
+    if (hasPendingChanges.value) {
+      showNotice('Сначала сохрани или отмени черновик')
+      return
     }
 
-    campaigns.value.unshift(campaign)
-    selectedCampaignId.value = campaign.id
-    selectedStreamId.value = campaign.streams[0].id
-    persistCampaigns()
-    showNotice('Кампания создана в mock-режиме')
-    return true
+    isLoading.value = true
+    if (await loadRemoteData()) showNotice('Данные загружены из Keitaro')
   }
 
   async function createCampaign(form: CampaignForm): Promise<boolean> {
@@ -778,8 +571,6 @@ export function useCampaigns() {
       return false
     }
 
-    if (!keitaro) return createMockCampaign(form, offerId)
-
     isSaving.value = true
     try {
       const [groups, domains, trafficSources] = await Promise.all([
@@ -787,6 +578,9 @@ export function useCampaigns() {
         keitaro.getDomains(),
         keitaro.getTrafficSources(),
       ])
+      groupCatalog.value = groups
+      domainCatalog.value = domains
+      sourceCatalog.value = trafficSources
       const group = findByName(groups, form.group)
       const domain = findByName(domains, form.domain)
       const source = findByName(trafficSources, form.source)
@@ -802,26 +596,40 @@ export function useCampaigns() {
       if (source) payload.traffic_source_id = source.id
 
       const remoteCampaign = await keitaro.createCampaign(payload)
-      await restoreArchivedOffers([offerId])
-      const stream = await keitaro.createStream({
+      const googleStream = await keitaro.createStream({
         campaign_id: remoteCampaign.id,
         type: 'regular',
-        name: 'Офферы кампании',
+        name: `${geoList.join(', ')} → Google`,
         schema: 'redirect',
         action_type: 'http',
+        action_payload: 'https://google.com',
         filters: [{ name: 'country', mode: 'accept', payload: geoList }],
+        offers: [],
+      })
+      const offerStream = await keitaro.createStream({
+        campaign_id: remoteCampaign.id,
+        type: 'default',
+        name: 'Оффер кампании',
+        schema: 'landings',
+        action_type: 'http',
+        filters: [],
         offers: [{ offer_id: offerId, share: 100, state: 'active' }],
       })
-      const campaign = mapRemoteCampaign(remoteCampaign, [stream])
+      const campaign = mapRemoteCampaign(remoteCampaign, [googleStream, offerStream])
 
       campaign.geo = geoList.join(', ')
       campaign.domain = form.domain
       campaign.group = form.group
       campaign.source = form.source
+      await keitaro.updateCampaignMetadata(campaign.id, {
+        geo: campaign.geo,
+        domain: campaign.domain,
+        group: campaign.group,
+        source: campaign.source,
+      })
       campaigns.value.unshift(campaign)
       selectedCampaignId.value = campaign.id
-      selectedStreamId.value = campaign.streams[0]?.id ?? null
-      persistCampaigns()
+      selectedStreamId.value = getInitialStreamId(campaign)
       showNotice('Кампания создана и отправлена в Keitaro')
       return true
     } catch (error) {
@@ -841,10 +649,11 @@ export function useCampaigns() {
         state: 'added',
         pending: true,
         baseState: 'none',
+        share: 0,
+        baseShare: 0,
       }),
     )
     offerToAdd.value = ''
-    persistCampaigns()
     showNotice('Оффер добавлен в черновик')
   }
 
@@ -854,10 +663,10 @@ export function useCampaigns() {
 
     item.state = 'removed'
     item.pinned = false
+    item.share = 0
     item.savedPercentage = null
     lastRemovedOfferId.value = id
     refreshPending(item)
-    persistCampaigns()
     showNotice('Оффер помечен на удаление')
   }
 
@@ -867,10 +676,10 @@ export function useCampaigns() {
 
     item.state = item.baseState === 'removed' ? 'restored' : item.baseState === 'none' ? 'added' : 'active'
     item.pinned = item.basePinned
+    item.share = item.baseShare
     item.savedPercentage = item.basePercentage
     if (lastRemovedOfferId.value === id) lastRemovedOfferId.value = null
     refreshPending(item)
-    persistCampaigns()
     showNotice(item.pending ? 'Оффер возвращён в черновик' : 'Удаление отменено')
   }
 
@@ -886,7 +695,6 @@ export function useCampaigns() {
         : row.percentage
       : null
     refreshPending(item)
-    persistCampaigns()
     showNotice(
       item.pinned
         ? `Процент закреплён: ${formatPercentage(item.savedPercentage ?? 0)}%`
@@ -903,41 +711,11 @@ export function useCampaigns() {
     item.pinned = true
     item.savedPercentage = Math.min(100, Math.max(0, Math.round(value)))
     refreshPending(item)
-    persistCampaigns()
     showNotice(`Процент оффера изменён: ${item.savedPercentage}%`)
   }
 
   function buildIntegerShares(rows: OfferRow[]): number[] {
-    const rawShares = rows.map((row) => row.percentage)
-    const shares = rawShares.map((share) => Math.max(0, Math.floor(share)))
-    let remainder = 100 - shares.reduce((sum, share) => sum + share, 0)
-    const order = rawShares
-      .map((share, index) => ({ index, fraction: share - Math.floor(share) }))
-      .sort((left, right) => right.fraction - left.fraction)
-
-    let cursor = 0
-    while (remainder > 0 && order.length > 0) {
-      shares[order[cursor % order.length].index] += 1
-      remainder -= 1
-      cursor += 1
-    }
-
-    return shares
-  }
-
-  async function restoreArchivedOffers(offerIds: number[]): Promise<void> {
-    if (!keitaro) return
-
-    const archivedIds = new Set(
-      offerCatalog.value.filter((offer) => offer.archived).map((offer) => offer.id),
-    )
-    const idsToRestore = offerIds.filter((id) => archivedIds.has(id))
-    if (idsToRestore.length === 0) return
-
-    await Promise.all(idsToRestore.map((id) => keitaro.restoreOffer(id)))
-    offerCatalog.value.forEach((offer) => {
-      if (idsToRestore.includes(offer.id)) offer.archived = false
-    })
+    return calculateIntegerShares(rows)
   }
 
   function commitOfferChanges(stream: CampaignStream): void {
@@ -945,6 +723,8 @@ export function useCampaigns() {
       if (item.state === 'removed') {
         item.baseState = 'removed'
         item.basePinned = item.pinned
+        item.share = 0
+        item.baseShare = 0
         item.basePercentage = item.savedPercentage
         item.pending = false
         return
@@ -952,6 +732,7 @@ export function useCampaigns() {
       item.state = 'active'
       item.baseState = 'active'
       item.basePinned = item.pinned
+      item.baseShare = item.share
       item.basePercentage = item.pinned ? item.savedPercentage : null
       item.pending = false
     })
@@ -976,17 +757,22 @@ export function useCampaigns() {
     stream.pending = false
   }
 
-  function buildStreamRequest(stream: CampaignStream, offers: { offer_id: number; share: number; state: 'active' }[]) {
+  function buildStreamRequest(
+    stream: CampaignStream,
+    campaignId: number,
+    offers: { offer_id: number; share: number; state: 'active' }[],
+  ) {
     return {
+      campaign_id: campaignId,
       type: stream.type,
       name: stream.name,
-      schema: 'redirect' as const,
+      schema: stream.type === 'default' && offers.length > 0 ? 'landings' as const : 'redirect' as const,
       action_type: 'http',
       state: stream.status === 'paused' || stream.status === 'removed' ? 'disabled' as const : 'active' as const,
       filters: stream.geo.length
         ? [{ name: 'country', mode: 'accept', payload: stream.geo }]
         : [],
-      action_options: stream.fallbackUrl ? { url: stream.fallbackUrl } : undefined,
+      action_payload: stream.fallbackUrl || undefined,
       offers,
     }
   }
@@ -1021,6 +807,7 @@ export function useCampaigns() {
     isSaving.value = true
     try {
       const removedStreams = campaign.streams.filter((item) => item.pending && item.status === 'removed')
+      const isNewStream = stream.isNew || isTemporaryStreamId(stream.id)
       const activeRows = selectedOffers.value.filter((offer) => offer.state !== 'removed')
       const shares = buildIntegerShares(activeRows)
       const offerPayload = activeRows.map((offer, index) => ({
@@ -1029,35 +816,37 @@ export function useCampaigns() {
         state: 'active' as const,
       }))
 
+      activeRows.forEach((offer, index) => {
+        const item = stream.offers.find((candidate) => candidate.id === offer.id)
+        if (item) item.share = shares[index]
+      })
+
       if (activeRows.length === 0 && stream.type !== 'default') {
         stream.status = 'paused'
       }
 
-      if (keitaro) {
-        for (const removedStream of removedStreams) {
-          if (!removedStream.isNew) {
-            await keitaro.updateStream(removedStream.id, buildStreamRequest(removedStream, []))
-          }
+      for (const removedStream of removedStreams) {
+        if (!removedStream.isNew && !isTemporaryStreamId(removedStream.id)) {
+          await keitaro.deleteStream(removedStream.id, campaign.id)
         }
+      }
 
-        if (activeRows.length === 0) {
-          if (stream.id > 0 && !stream.isNew) {
-            await keitaro.updateStream(stream.id, buildStreamRequest(stream, []))
-          }
-        } else {
-          await restoreArchivedOffers(activeRows.map((offer) => offer.id))
-
-          if (stream.isNew) {
-            const remoteStream = await keitaro.createStream({
-              campaign_id: campaign.id,
-              ...buildStreamRequest(stream, offerPayload),
-            })
-            stream.id = remoteStream.id
-            stream.isNew = false
-          } else {
-            await keitaro.updateStream(stream.id, buildStreamRequest(stream, offerPayload))
-          }
+      if (activeRows.length === 0) {
+        if (!isNewStream) {
+          await keitaro.updateStream(stream.id, buildStreamRequest(stream, campaign.id, []))
         }
+      } else if (isNewStream) {
+        const remoteStream = await keitaro.createStream({
+          ...buildStreamRequest(stream, campaign.id, offerPayload),
+        })
+        const remoteStreamId = Number(remoteStream.id)
+        if (!Number.isInteger(remoteStreamId) || remoteStreamId <= 0) {
+          throw new Error('Keitaro не вернул ID созданного потока')
+        }
+        stream.id = remoteStreamId
+        stream.isNew = false
+      } else {
+        await keitaro.updateStream(stream.id, buildStreamRequest(stream, campaign.id, offerPayload))
       }
 
       if (activeRows.length === 1 && activeOffers.value[0].pinned) {
@@ -1073,22 +862,17 @@ export function useCampaigns() {
       removedStreams.forEach(commitStreamChanges)
       campaign.streams = campaign.streams.filter((item) => item.status !== 'removed')
       if (getCampaignOfferCount(campaign) === 0) {
-        if (keitaro && campaign.status === 'active') {
+        if (campaign.status === 'active') {
           await keitaro.updateCampaignState(campaign.id, 'disabled')
         }
         campaign.status = 'paused'
       }
       showSingleOfferWarning.value = false
       lastRemovedOfferId.value = null
-      persistCampaigns()
       showNotice(
         getCampaignOfferCount(campaign) === 0
-          ? keitaro
-            ? 'Офферы удалены, кампания поставлена на паузу в Keitaro'
-            : 'Офферы удалены, кампания поставлена на паузу'
-          : keitaro
-            ? 'Изменения отправлены в Keitaro'
-            : 'Изменения сохранены в mock Keitaro',
+          ? 'Офферы удалены, кампания поставлена на паузу в Keitaro'
+          : 'Изменения отправлены в Keitaro',
       )
     } catch (error) {
       showNotice(`Не удалось сохранить изменения: ${getErrorMessage(error)}`)
@@ -1115,6 +899,7 @@ export function useCampaigns() {
       .map((item) => {
         item.state = item.baseState === 'removed' ? 'removed' : 'active'
         item.pinned = item.basePinned
+        item.share = item.baseShare
         item.savedPercentage = item.basePercentage
         item.pending = false
         return item
@@ -1133,7 +918,6 @@ export function useCampaigns() {
     })
     lastRemovedOfferId.value = null
     showSingleOfferWarning.value = false
-    persistCampaigns()
     showNotice('Черновые изменения отменены')
   }
 
@@ -1148,19 +932,10 @@ export function useCampaigns() {
 
     isSaving.value = true
     try {
-      if (keitaro) {
-        await keitaro.updateCampaignState(campaign.id, nextStatus === 'active' ? 'active' : 'disabled')
-      }
+      await keitaro.updateCampaignState(campaign.id, nextStatus === 'active' ? 'active' : 'disabled')
       campaign.status = nextStatus
-      persistCampaigns()
       showNotice(
-        keitaro
-          ? nextStatus === 'active'
-            ? 'Кампания запущена в Keitaro'
-            : 'Кампания приостановлена в Keitaro'
-          : nextStatus === 'active'
-            ? 'Кампания запущена'
-            : 'Кампания приостановлена',
+        nextStatus === 'active' ? 'Кампания запущена в Keitaro' : 'Кампания приостановлена в Keitaro',
       )
     } catch (error) {
       showNotice(`Не удалось изменить статус: ${getErrorMessage(error)}`)
@@ -1169,23 +944,25 @@ export function useCampaigns() {
     }
   }
 
-  if (keitaro) void loadRemoteData()
+  void loadRemoteData()
 
   return {
     activeOffers,
     availableOffers,
     addStream,
     campaigns,
-    connectionLabel: isApiMode ? 'Keitaro API' : 'Mock API',
+    connectionLabel: 'FastAPI · Keitaro API',
     createCampaign,
     discardOfferChanges,
     filteredCampaigns,
     formatPercentage,
+    groupCatalog,
+    domainCatalog,
+    sourceCatalog,
     getCampaignOfferCount,
     getOffer,
     hasPendingChanges,
     hasInvalidPercentageTotal,
-    isApiMode,
     isLoading,
     isSaving,
     showSingleOfferWarning,
@@ -1197,6 +974,7 @@ export function useCampaigns() {
     pendingChangeCount,
     removeOffer,
     removeStream,
+    reloadFromKeitaro,
     addOffer,
     bringBackOffer,
     saveOfferChanges,

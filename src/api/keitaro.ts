@@ -7,6 +7,12 @@ export interface KeitaroCampaign {
   traffic_source_id?: number
   domain_id?: number
   created_at?: string
+  metadata?: {
+    geo?: string
+    domain?: string
+    group?: string
+    source?: string
+  }
 }
 
 export interface KeitaroOffer {
@@ -36,9 +42,14 @@ export interface KeitaroStream {
   state?: 'active' | 'disabled' | 'deleted' | string
   action_type?: string
   action_options?: Record<string, unknown>
+  action_payload?: string
   schema?: 'landings' | 'redirect' | 'action' | string
   filters?: unknown[]
   offers?: KeitaroOfferStream[]
+  metadata?: {
+    geo?: string[]
+    fallback_url?: string
+  }
 }
 
 export interface KeitaroGroup {
@@ -73,6 +84,7 @@ export interface KeitaroStreamRequest {
   schema: 'landings' | 'redirect' | 'action'
   action_type: string
   action_options?: Record<string, unknown>
+  action_payload?: string
   state?: 'active' | 'disabled'
   filters?: unknown[]
   offers: KeitaroOfferStream[]
@@ -80,33 +92,22 @@ export interface KeitaroStreamRequest {
 
 export interface KeitaroStreamUpdate extends Partial<KeitaroStreamRequest> {
   offers: KeitaroOfferStream[]
+  campaign_id?: number
 }
 
 export interface KeitaroConfig {
   baseUrl: string
-  apiKey: string
 }
 
 function normalizeBaseUrl(value: string): string {
   const withoutTrailingSlash = value.trim().replace(/\/+$/, '')
 
-  if (withoutTrailingSlash.endsWith('/admin_api/v1')) return withoutTrailingSlash
-  if (withoutTrailingSlash.endsWith('/admin')) {
-    return `${withoutTrailingSlash.slice(0, -'/admin'.length)}/admin_api/v1`
-  }
-
-  return `${withoutTrailingSlash}/admin_api/v1`
+  return withoutTrailingSlash || '/api'
 }
 
-export function getKeitaroConfig(): KeitaroConfig | null {
-  const apiUrl = import.meta.env.VITE_KEITARO_API_URL?.trim()
-  const apiKey = import.meta.env.VITE_KEITARO_API_KEY?.trim()
-
-  if (!apiUrl || !apiKey) return null
-
+export function getKeitaroConfig(): KeitaroConfig {
   return {
-    baseUrl: normalizeBaseUrl(apiUrl),
-    apiKey,
+    baseUrl: normalizeBaseUrl(import.meta.env.VITE_API_URL ?? '/api'),
   }
 }
 
@@ -126,7 +127,6 @@ export class KeitaroClient {
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers)
     headers.set('Accept', 'application/json')
-    headers.set('Api-Key', this.config.apiKey)
 
     if (init.body) headers.set('Content-Type', 'application/json')
 
@@ -205,21 +205,30 @@ export class KeitaroClient {
     })
   }
 
-  restoreOffer(offerId: number): Promise<KeitaroOffer> {
-    return this.request<KeitaroOffer>(`/offers/${offerId}/restore`, {
-      method: 'POST',
+  deleteStream(streamId: number, campaignId: number): Promise<void> {
+    return this.request<void>(`/streams/${streamId}?campaign_id=${campaignId}`, {
+      method: 'DELETE',
     })
   }
 
   updateCampaignState(campaignId: number, state: 'active' | 'disabled'): Promise<KeitaroCampaign> {
-    return this.request<KeitaroCampaign>(`/campaigns/${campaignId}`, {
-      method: 'PUT',
+    return this.request<KeitaroCampaign>(`/campaigns/${campaignId}/state`, {
+      method: 'POST',
       body: JSON.stringify({ state }),
+    })
+  }
+
+  updateCampaignMetadata(
+    campaignId: number,
+    payload: { geo: string; domain: string; group: string; source: string },
+  ): Promise<{ geo: string; domain: string; group: string; source: string }> {
+    return this.request(`/campaigns/${campaignId}/metadata`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
     })
   }
 }
 
-export function createKeitaroClient(): KeitaroClient | null {
-  const config = getKeitaroConfig()
-  return config ? new KeitaroClient(config) : null
+export function createKeitaroClient(): KeitaroClient {
+  return new KeitaroClient(getKeitaroConfig())
 }

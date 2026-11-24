@@ -16,9 +16,9 @@ const createForm = ref<CampaignForm>({
   name: '',
   geo: '',
   offer: '',
-  domain: 'go.example.com',
-  group: 'TESTS',
-  source: 'Facebook',
+  domain: 'kt-emulator.test',
+  group: 'FORTESTS',
+  source: 'FORTESTS',
 })
 
 const {
@@ -33,11 +33,14 @@ const {
   formatPercentage,
   getCampaignOfferCount,
   getOffer,
+  groupCatalog,
+  domainCatalog,
+  sourceCatalog,
   hasPendingChanges,
   hasInvalidPercentageTotal,
-  isApiMode,
   isLoading,
   isSaving,
+  reloadFromKeitaro,
   removeStream,
   showSingleOfferWarning,
   confirmSingleOfferSave,
@@ -70,9 +73,9 @@ function resetCreateForm() {
     name: '',
     geo: '',
     offer: '',
-    domain: 'go.example.com',
-    group: 'TESTS',
-    source: 'Facebook',
+    domain: 'kt-emulator.test',
+    group: 'FORTESTS',
+    source: 'FORTESTS',
   }
 }
 
@@ -99,7 +102,13 @@ async function submitCreate(): Promise<void> {
     <AppSidebar :active-view="activeView" :connection-label="connectionLabel" @navigate="navigate" />
 
     <main class="mx-auto w-full max-w-[1480px] px-12 py-[38px] max-[1050px]:px-6 max-[700px]:px-3.5 max-[700px]:py-6">
-      <TopBar :connection-label="connectionLabel" :is-create="activeView === 'create'" />
+      <TopBar
+        :connection-label="connectionLabel"
+        :is-create="activeView === 'create'"
+        :is-loading="isLoading"
+        :is-saving="isSaving"
+        @reload="reloadFromKeitaro"
+      />
 
       <div v-if="isLoading" class="rounded-[15px] border border-[#dce8f0] bg-white p-8 text-sm text-[#71849a] shadow-[0_7px_24px_rgba(36,59,86,.045)]">
         Подключаемся к Keitaro API…
@@ -134,6 +143,7 @@ async function submitCreate(): Promise<void> {
             :active-offers="activeOffers"
             :available-offers="availableOffers"
             :format-percentage="formatPercentage"
+            :has-active-offers-in-campaign="getCampaignOfferCount(selectedCampaign) > 0"
             :has-pending-changes="hasPendingChanges"
             :has-invalid-percentage-total="hasInvalidPercentageTotal"
             :is-saving="isSaving"
@@ -161,12 +171,14 @@ async function submitCreate(): Promise<void> {
           :form="createForm"
           :get-offer="getOffer"
           :offer-catalog="offerCatalog"
-          :is-api-mode="isApiMode"
+          :domain-catalog="domainCatalog"
+          :group-catalog="groupCatalog"
+          :source-catalog="sourceCatalog"
           :is-saving="isSaving"
           @submit="submitCreate"
           @update:form="createForm = $event"
         />
-        <IntegrationNote :is-api-mode="isApiMode" />
+        <IntegrationNote />
       </section>
 
       <Transition name="toast">

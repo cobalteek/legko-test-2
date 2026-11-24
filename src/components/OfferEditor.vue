@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { OfferCatalogItem, OfferRow } from '../composables/useCampaigns'
+import OfferCombobox from './OfferCombobox.vue'
 
 defineProps<{
   activeOffers: OfferRow[]
   availableOffers: OfferCatalogItem[]
   formatPercentage: (value: number) => string
+  hasActiveOffersInCampaign: boolean
   hasPendingChanges: boolean
   hasInvalidPercentageTotal: boolean
   isSaving: boolean
@@ -28,10 +30,6 @@ const emit = defineEmits<{
   'cancel-single-offer': []
 }>()
 
-function updateOfferToAdd(event: Event): void {
-  emit('update:offerToAdd', (event.target as HTMLSelectElement).value)
-}
-
 function updateOfferPercentage(event: Event, id: number): void {
   const input = event.target as HTMLInputElement
   if (input.value === '') return
@@ -54,7 +52,7 @@ function updateOfferPercentage(event: Event, id: number): void {
       </span>
     </div>
 
-    <div v-if="activeOffers.length === 0 && hasPendingChanges" class="mt-4 rounded-[9px] border border-[#efc5c8] bg-[#fff4f4] p-3 text-[10px] leading-relaxed text-[#a5686e]">
+    <div v-if="activeOffers.length === 0 && !hasActiveOffersInCampaign && hasPendingChanges" class="mt-4 rounded-[9px] border border-[#efc5c8] bg-[#fff4f4] p-3 text-[10px] leading-relaxed text-[#a5686e]">
       После сохранения кампания автоматически встанет на паузу: активных офферов не останется, поэтому трафик не будет уходить в общий fallback-редирект.
     </div>
     <div v-else-if="hasInvalidPercentageTotal" class="mt-4 rounded-[9px] border border-[#efc5c8] bg-[#fff4f4] p-3 text-[10px] leading-relaxed text-[#a5686e]">
@@ -73,15 +71,13 @@ function updateOfferPercentage(event: Event, id: number): void {
     </div>
 
     <div class="mt-5 flex gap-2 max-[700px]:flex-col">
-      <select
-        :value="offerToAdd"
+      <OfferCombobox
+        :model-value="offerToAdd"
+        :options="availableOffers"
+        placeholder="Поиск оффера для добавления"
         :disabled="availableOffers.length === 0"
-        class="min-w-0 flex-1 rounded-lg border border-[#c9dce9] bg-[#fbfcfe] px-2.5 py-2.5 text-[11px] text-[#354b63] outline-none transition focus:border-[#80ccb9] focus:ring-2 focus:ring-[#80ccb9]/20 disabled:cursor-not-allowed disabled:opacity-50"
-        @change="updateOfferToAdd"
-      >
-        <option value="">Выбрать оффер для добавления</option>
-        <option v-for="offer in availableOffers" :key="offer.id" :value="offer.id">#{{ offer.id }} · {{ offer.name }}</option>
-      </select>
+        @update:model-value="emit('update:offerToAdd', $event)"
+      />
       <button
         type="button"
         class="rounded-lg border border-[#c9dce9] bg-[#e9f1f7] px-3 text-[11px] font-bold text-[#4e708d] transition hover:border-[#9bbdd1] hover:bg-[#dce9f2] disabled:cursor-not-allowed disabled:opacity-50 max-[700px]:py-2.5"
